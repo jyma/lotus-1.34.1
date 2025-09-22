@@ -552,6 +552,30 @@ func DoubleCallWrap(f func()) func() {
 	}
 }
 
+func (st *Local) CheckDeclareSector(ctx context.Context, sid storiface.SectorRef, fileType storiface.SectorFileType, ssize abi.SectorSize, pathType storiface.PathType) ([]storiface.SectorStorageInfo, error) {
+	si0, err := st.index.StorageFindSector(ctx, sid.ID, fileType, ssize, false)
+	if len(si0) > 0 || err != nil {
+		return si0, err
+	}
+	if pathType == storiface.PathStorage {
+		for id, path := range st.paths {
+			if sstInfo, err := st.index.StorageInfo(ctx, id); err == nil {
+				if sstInfo.CanStore {
+					p := filepath.Join(path.local, fileType.String(), storiface.SectorName(sid.ID))
+					_, err := os.Stat(p)
+					if os.IsNotExist(err) || err != nil {
+						continue
+					}
+					if err := st.index.StorageDeclareSector(ctx, id, sid.ID, fileType, sstInfo.CanStore); err != nil {
+						continue
+					}
+				}
+			}
+		}
+	}
+	return st.index.StorageFindSector(ctx, sid.ID, fileType, ssize, false)
+}
+
 func (st *Local) AcquireSector(ctx context.Context, sid storiface.SectorRef, existing storiface.SectorFileType, allocate storiface.SectorFileType, pathType storiface.PathType, op storiface.AcquireMode, opts ...storiface.AcquireOption) (storiface.SectorPaths, storiface.SectorPaths, error) {
 	if existing|allocate != existing^allocate {
 		return storiface.SectorPaths{}, storiface.SectorPaths{}, xerrors.New("can't both find and allocate a sector")
@@ -598,7 +622,9 @@ func (st *Local) AcquireSector(ctx context.Context, sid storiface.SectorRef, exi
 			continue
 		}
 
-		si, err := st.index.StorageFindSector(ctx, sid.ID, fileType, ssize, false)
+		//si, err := st.index.StorageFindSector(ctx, sid.ID, fileType, ssize, false)
+		si, err := st.CheckDeclareSector(ctx, sid, fileType, ssize, pathType)
+
 		if err != nil {
 			if fileType&existing != 0 {
 				log.Warnf("finding existing sector %d(t:%d) failed: %+v", sid, fileType, err)
